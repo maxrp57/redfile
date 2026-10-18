@@ -130,8 +130,17 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
       if(e.type==='unavailable-id'&&tries<5){reset();host(tries+1);return}
       st.textContent='Erreur de connexion ('+e.type+'). Réessaie.';
     });
-    peer.on('disconnected',function(){try{peer.reconnect()}catch(e){}});
+    peer.on('disconnected',function(){
+      if(connected)return;
+      try{peer.reconnect()}catch(e){}
+    });
+    try{if(navigator.wakeLock)navigator.wakeLock.request('screen').catch(function(){})}catch(e){}
   }
+  document.addEventListener('visibilitychange',function(){
+    if(document.visibilityState==='visible'&&peer&&!connected&&peer.disconnected&&!peer.destroyed){
+      try{peer.reconnect()}catch(e){}
+    }
+  });
   $('bShow').onclick=function(){reset();go('show');host(0)};
 
   // --- Entrer un code (invité) ---
@@ -142,14 +151,24 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
     if(c.length!==4){err('Le code comporte 4 caractères.');return}
     if(!checkLib(err))return;
     reset();code=c;$('err').textContent='';$('stEnter').hidden=false;
-    peer=new Peer();
-    peer.on('open',function(){
+    var tries=0;
+    function attempt(){
+      try{if(conn)conn.close()}catch(e){}
+      conn=null;
       setup(peer.connect('enq-'+c.toLowerCase(),{reliable:true}),false);
-      timeout=setTimeout(function(){reset();err('Pas de réponse. Vérifie le code et que l’autre joueur affiche bien le sien.')},15000);
-    });
+      clearTimeout(timeout);
+      timeout=setTimeout(function(){
+        if(connected)return;
+        if(tries<5){tries++;attempt();return}
+        reset();err('Pas de réponse. Vérifie le code, et que l’autre joueur laisse son écran allumé sur son code.');
+      },8000);
+    }
+    peer=new Peer();
+    peer.on('open',attempt);
     peer.on('error',function(e){
+      if(e.type==='peer-unavailable'&&tries<5){tries++;clearTimeout(timeout);timeout=setTimeout(attempt,2500);return}
       reset();
-      err(e.type==='peer-unavailable'?'Code introuvable. Vérifie-le et que l’autre joueur affiche bien son code.':'Erreur de connexion ('+e.type+'). Réessaie.');
+      err(e.type==='peer-unavailable'?'Code introuvable. L’autre joueur doit garder son écran allumé sur son code, sans changer d’appli.':'Erreur de connexion ('+e.type+'). Réessaie.');
     });
   };
 })();

@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Jeu d’enquête</title>
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <style>
 :root{--bg:#faf7f2;--card:#fff;--ink:#1f1b16;--mute:#6f675c;--acc:#8b1e2d;--accink:#fff;--line:#ddd3c4}
 @media (prefers-color-scheme:dark){:root{--bg:#17130f;--card:#241e18;--ink:#f3ece1;--mute:#a79c8c;--acc:#d9566a;--accink:#1a0d10;--line:#3a3128}}
@@ -70,7 +69,7 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
 
  <section id="ready" hidden>
   <div class="card">
-   <div class="status ok"><span class="dot"></span><span id="readyMsg">Les deux joueurs sont connectés</span></div>
+   <div class="status ok"><span class="dot"></span><span>Les deux joueurs sont connectés</span></div>
    <h1 style="font-size:28px">Prêts à jouer !</h1>
    <p>Partie <b id="gameCode"></b></p>
   </div>
@@ -86,62 +85,63 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
     b.onclick=function(){reset();go(b.getAttribute('data-back'))}
   });
 
+  // Relais : ntfy.sh (gratuit, sans compte). Les messages passent par le serveur, pas de connexion directe entre téléphones.
+  var BASE='https://ntfy.sh/';
   var ALPHA='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  var peer=null,conn=null,timeout=null,connected=false,code='';
-  // Pour la suite du jeu : window.jeu.conn.send({...}) et window.jeu.onMessage = function(data){...}
-  window.jeu={conn:null,isHost:false,onMessage:function(){}};
+  var me=Math.random().toString(36).slice(2,10);
+  var es=null,topic='',code='',paired=false,isHost=false,helloTimer=null,openTimer=null,sub=null;
+
+  // Pour la suite du jeu : window.jeu.send({...}) et window.jeu.onMessage = function(data){...}
+  window.jeu={isHost:false,send:function(d){post({t:'g',d:d})},onMessage:function(){}};
 
   function mkCode(){var s='';for(var i=0;i<4;i++)s+=ALPHA[Math.floor(Math.random()*ALPHA.length)];return s}
+  function post(obj){
+    obj.id=me;
+    return fetch(BASE+topic,{method:'POST',body:JSON.stringify(obj)}).catch(function(){});
+  }
   function reset(){
-    clearTimeout(timeout);connected=false;
-    try{if(conn)conn.close()}catch(e){}
-    try{if(peer)peer.destroy()}catch(e){}
-    peer=null;conn=null;window.jeu.conn=null;
+    clearInterval(helloTimer);clearTimeout(openTimer);
+    if(es){try{es.close()}catch(e){}es=null}
+    paired=false;sub=null;
   }
-  function setup(c,host){
-    if(conn&&conn!==c){try{c.close()}catch(e){}return}  // 2 joueurs maximum
-    conn=c;window.jeu.conn=c;window.jeu.isHost=host;
-    c.on('open',function(){
-      clearTimeout(timeout);connected=true;
-      $('gameCode').textContent=code;$('readyMsg').textContent='Les deux joueurs sont connectés';
-      go('ready');
-    });
-    c.on('data',function(d){window.jeu.onMessage(d)});
-    c.on('close',function(){
-      if(connected){$('readyMsg').textContent='L’autre joueur s’est déconnecté'}
-    });
+  function ready(){
+    if(paired)return;paired=true;
+    clearInterval(helloTimer);clearTimeout(openTimer);
+    window.jeu.isHost=isHost;
+    $('gameCode').textContent=code;go('ready');
   }
-  function checkLib(show){
-    if(typeof Peer==='undefined'){show('Connexion indisponible (bibliothèque non chargée). Vérifie ta connexion internet.');return false}
-    return true;
+  function onMsg(m){
+    if(!m||m.id===me)return;
+    if(m.t==='hello'){
+      if(isHost&&(!paired||m.id===window.jeu._peer)){window.jeu._peer=m.id;post({t:'ack',to:m.id});ready()}
+    }else if(m.t==='ack'){
+      if(!isHost&&m.to===me)ready();
+    }else if(m.t==='g'&&paired){
+      window.jeu.onMessage(m.d);
+    }
+  }
+  // Ouvre l'écoute du sujet ; cb() quand l'écoute est active, fail(texte) si le serveur est injoignable
+  function listen(cb,fail){
+    es=new EventSource(BASE+topic+'/sse');
+    var opened=false;
+    es.onopen=function(){if(!opened){opened=true;clearTimeout(openTimer);cb()}};
+    es.onmessage=function(ev){
+      try{var d=JSON.parse(ev.data);if(d.event==='message'&&d.message)onMsg(JSON.parse(d.message))}catch(e){}
+    };
+    openTimer=setTimeout(function(){if(!opened){reset();fail('Serveur injuignable. Vérifie ta connexion internet et réessaie.')}},12000);
   }
 
   $('bJoin').onclick=function(){go('choose')};
 
   // --- Afficher mon code (hôte) ---
-  function host(tries){
-    var st=$('stShow').lastChild;
-    if(!checkLib(function(t){st.textContent=t}))return;
-    code=mkCode();$('myCode').textContent=code;st.textContent='Création de la partie…';
-    peer=new Peer('enq-'+code.toLowerCase());
-    peer.on('open',function(){st.textContent='En attente de l’autre joueur…'});
-    peer.on('connection',function(c){setup(c,true)});
-    peer.on('error',function(e){
-      if(e.type==='unavailable-id'&&tries<5){reset();host(tries+1);return}
-      st.textContent='Erreur de connexion ('+e.type+'). Réessaie.';
-    });
-    peer.on('disconnected',function(){
-      if(connected)return;
-      try{peer.reconnect()}catch(e){}
-    });
-    try{if(navigator.wakeLock)navigator.wakeLock.request('screen').catch(function(){})}catch(e){}
-  }
-  document.addEventListener('visibilitychange',function(){
-    if(document.visibilityState==='visible'&&peer&&!connected&&peer.disconnected&&!peer.destroyed){
-      try{peer.reconnect()}catch(e){}
-    }
-  });
-  $('bShow').onclick=function(){reset();go('show');host(0)};
+  $('bShow').onclick=function(){
+    reset();isHost=true;window.jeu._peer=null;
+    code=mkCode();topic='enquete-'+code.toLowerCase();
+    $('myCode').textContent=code;
+    var st=$('stShow').lastChild;st.textContent='Création de la partie…';
+    go('show');
+    listen(function(){st.textContent='En attente de l’autre joueur…'},function(t){st.textContent=t});
+  };
 
   // --- Entrer un code (invité) ---
   $('bEnter').onclick=function(){reset();$('err').textContent='';$('stEnter').hidden=true;$('codeIn').value='';go('enter');setTimeout(function(){$('codeIn').focus()},50)};
@@ -149,27 +149,17 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
     var c=$('codeIn').value.toUpperCase().replace(/[^A-Z0-9]/g,'');
     var err=function(t){$('stEnter').hidden=true;$('err').textContent=t};
     if(c.length!==4){err('Le code comporte 4 caractères.');return}
-    if(!checkLib(err))return;
-    reset();code=c;$('err').textContent='';$('stEnter').hidden=false;
-    var tries=0;
-    function attempt(){
-      try{if(conn)conn.close()}catch(e){}
-      conn=null;
-      setup(peer.connect('enq-'+c.toLowerCase(),{reliable:true}),false);
-      clearTimeout(timeout);
-      timeout=setTimeout(function(){
-        if(connected)return;
-        if(tries<5){tries++;attempt();return}
-        reset();err('Pas de réponse. Vérifie le code, et que l’autre joueur laisse son écran allumé sur son code.');
-      },8000);
-    }
-    peer=new Peer();
-    peer.on('open',attempt);
-    peer.on('error',function(e){
-      if(e.type==='peer-unavailable'&&tries<5){tries++;clearTimeout(timeout);timeout=setTimeout(attempt,2500);return}
-      reset();
-      err(e.type==='peer-unavailable'?'Code introuvable. L’autre joueur doit garder son écran allumé sur son code, sans changer d’appli.':'Erreur de connexion ('+e.type+'). Réessaie.');
-    });
+    reset();isHost=false;code=c;topic='enquete-'+c.toLowerCase();
+    $('err').textContent='';$('stEnter').hidden=false;
+    listen(function(){
+      var n=0;
+      function hello(){
+        if(paired)return;
+        if(n++>=12){reset();err('Code introuvable. Vérifie-le, et que l’autre joueur affiche bien son code.');return}
+        post({t:'hello'});
+      }
+      hello();helloTimer=setInterval(hello,3000);
+    },err);
   };
 })();
 </script>

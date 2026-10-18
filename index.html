@@ -24,6 +24,17 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
 .ok .dot{background:#2e9e57;animation:none}.ok{color:#2e9e57}
 @keyframes p{50%{opacity:.25}}
 .err{color:var(--acc);font:600 14px system-ui,sans-serif;text-align:center;min-height:18px}
+button:disabled{opacity:.4}
+.card2{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:10px;margin-bottom:12px}
+.card2 p{text-align:left}
+.lab{font:700 11px system-ui,sans-serif;letter-spacing:.15em;text-transform:uppercase;color:var(--mute);margin-top:4px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-block;width:auto;padding:8px 11px;font:500 14px system-ui,sans-serif;border:1.5px solid var(--line);background:var(--bg);color:var(--ink);border-radius:999px}
+.chip.on{background:var(--acc);color:var(--accink);border-color:var(--acc)}
+.tabs{display:flex;gap:8px}.tabs button{padding:10px;font-size:15px}
+.row{display:flex;justify-content:space-between;align-items:center;font:15px system-ui,sans-serif;padding:4px 0;border-bottom:1px solid var(--line)}
+.mk{width:48px;padding:6px;font-size:18px;background:var(--bg);color:var(--ink);border:1.5px solid var(--line)}
+.log{font:13px/1.6 system-ui,sans-serif;color:var(--mute)}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -67,19 +78,18 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
   <button class="link" data-back="choose">Annuler</button>
  </section>
 
- <section id="ready" hidden>
-  <div class="card">
-   <div class="status ok"><span class="dot"></span><span>Les deux joueurs sont connectés</span></div>
-   <h1 style="font-size:28px">Prêts à jouer !</h1>
-   <p>Partie <b id="gameCode"></b></p>
-  </div>
+ <section id="game" hidden>
+  <div class="kicker" id="gstat" style="margin-bottom:10px"></div>
+  <div class="tabs"><button data-a="tab" data-v="play" id="tPlay">Jouer</button><button class="alt" data-a="tab" data-v="sheet" id="tSheet">Feuille d’enquête</button></div>
+  <div style="height:12px"></div>
+  <div id="gbody"></div>
  </section>
 </main>
 
 <script>
 (function(){
   var $=function(i){return document.getElementById(i)};
-  var secs=['home','choose','show','enter','ready'];
+  var secs=['home','choose','show','enter','game'];
   function go(n){secs.forEach(function(s){$(s).hidden=(s!==n)})}
   document.querySelectorAll('[data-back]').forEach(function(b){
     b.onclick=function(){reset();go(b.getAttribute('data-back'))}
@@ -89,10 +99,10 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
   var BASE='https://ntfy.sh/';
   var ALPHA='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   var me=Math.random().toString(36).slice(2,10);
-  var es=null,topic='',code='',paired=false,isHost=false,helloTimer=null,openTimer=null,sub=null;
+  var es=null,topic='',code='',paired=false,isHost=false,helloTimer=null,openTimer=null,sub=null,seq=0,lastN=0;
 
   // Pour la suite du jeu : window.jeu.send({...}) et window.jeu.onMessage = function(data){...}
-  window.jeu={isHost:false,send:function(d){post({t:'g',d:d})},onMessage:function(){}};
+  window.jeu={isHost:false,send:function(d){post({t:'g',d:d,n:++seq})},onMessage:function(){},onReady:function(){},onHello:function(){}};
 
   function mkCode(){var s='';for(var i=0;i<4;i++)s+=ALPHA[Math.floor(Math.random()*ALPHA.length)];return s}
   function post(obj){
@@ -102,21 +112,21 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
   function reset(){
     clearInterval(helloTimer);clearTimeout(openTimer);
     if(es){try{es.close()}catch(e){}es=null}
-    paired=false;sub=null;
+    paired=false;sub=null;seq=0;lastN=0;
   }
   function ready(){
     if(paired)return;paired=true;
     clearInterval(helloTimer);clearTimeout(openTimer);
     window.jeu.isHost=isHost;
-    $('gameCode').textContent=code;go('ready');
+    go('game');window.jeu.onReady();
   }
   function onMsg(m){
     if(!m||m.id===me)return;
     if(m.t==='hello'){
-      if(isHost&&(!paired||m.id===window.jeu._peer)){window.jeu._peer=m.id;post({t:'ack',to:m.id});ready()}
+      if(isHost&&(!paired||m.id===window.jeu._peer)){var again=paired;window.jeu._peer=m.id;post({t:'ack',to:m.id});ready();if(again)window.jeu.onHello()}
     }else if(m.t==='ack'){
       if(!isHost&&m.to===me)ready();
-    }else if(m.t==='g'&&paired){
+    }else if(m.t==='g'){if(!paired&&!isHost)ready();if(!paired||m.n<=lastN)return;lastN=m.n;
       window.jeu.onMessage(m.d);
     }
   }
@@ -161,6 +171,129 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
       hello();helloTimer=setInterval(hello,3000);
     },err);
   };
+})();
+</script>
+
+<script>
+(function(){
+  var $=function(i){return document.getElementById(i)},J=window.jeu;
+  var CAT={p:'Personnage',e:'État',a:'Attribut'},CARDS=[],BY={},MK={x:'✗','?':'?',v:'✓'},NEXT={'':'x',x:'?','?':'v',v:''};
+  [['p',['M. Parme','Lt Poussin','Mme Coton','Dr Azur','Pr Gazon','Mlle Fraise']],
+   ['e',['Paraît','Est','Devient','Semble','Demeure','Reste']],
+   ['a',['Inquiet(ète)','Nerveux(euse)','Affolé(e)','Soucieux(euse)','Tendu(e)','Crispé(e)','Anxieux(euse)','Agité(e)','Tracassé(e)']]
+  ].forEach(function(g){g[1].forEach(function(n,i){var c={id:g[0]+i,c:g[0],n:n};CARDS.push(c);BY[c.id]=c})});
+  function shuf(a){a=a.slice();for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1)),t=a[i];a[i]=a[j];a[j]=t}return a}
+  function nm(h){return h.map(function(i){return BY[i].n}).join(' · ')}
+  var G=null,tab='play',sel={};
+  function snd(d){J.send(d)}
+  function newG(hand,my,sol){
+    G={hand:hand,sol:sol,my:my,ph:my?'choose':'opp',marks:{},log:[],res:'',match:[],hyp:'',back:'choose',over:null};
+    hand.forEach(function(i){G.marks[i]='x'});render();
+  }
+
+  // Hôte : distribution (3 cartes cachées + 9 par joueur)
+  J.onReady=function(){
+    G=null;render();
+    if(!J.isHost)return;
+    var by=function(c){return shuf(CARDS.filter(function(x){return x.c===c}).map(function(x){return x.id}))};
+    var p=by('p'),e=by('e'),a=by('a'),sol=[p[0],e[0],a[0]];
+    var rest=shuf(p.slice(1).concat(e.slice(1),a.slice(1)));
+    var hostFirst=Math.random()<.5;
+    J._deal={k:'deal',hand:rest.slice(9),gFirst:!hostFirst};
+    snd(J._deal);
+    newG(rest.slice(0,9),hostFirst,sol);
+  };
+  J.onHello=function(){if(J.isHost&&J._deal)snd(J._deal)};
+
+  function finish(h,accHost){
+    var ok=h.slice().sort().join()===G.sol.slice().sort().join(),winHost=accHost?ok:!ok;
+    snd({k:'end',win:winHost?'host':'guest',by:accHost?'host':'guest',sol:G.sol,h:h});
+    G.over={iWon:winHost,byMe:accHost,ok:ok,sol:G.sol};
+  }
+
+  J.onMessage=function(d){
+    if(!G){if(d.k==='deal')newG(d.hand,d.gFirst,null);return}
+    if(d.k==='deal'||G.over)return;
+    if(d.k==='hyp'){
+      var m=d.h.filter(function(i){return G.hand.indexOf(i)>=0});
+      G.hyp=nm(d.h);G.log.unshift('Adversaire : '+G.hyp);
+      if(m.length){G.ph='respond';G.match=m}
+      else{snd({k:'none'});G.log.unshift('Tu n’avais aucune de ces cartes.');G.ph='opp'}
+    }else if(d.k==='show'){
+      G.marks[d.id]='x';G.res='Carte montrée : '+BY[d.id].n;G.log.unshift(G.res);G.ph='after';
+    }else if(d.k==='none'){
+      G.res='Personne n’a aucune de ces cartes.';G.log.unshift(G.res);G.ph='after';
+    }else if(d.k==='pass'){G.my=true;G.ph='choose'}
+    else if(d.k==='acc'&&J.isHost){finish(d.h,false)}
+    else if(d.k==='end'){G.over={iWon:d.win==='guest',byMe:d.by==='guest',ok:d.by===d.win,sol:d.sol}}
+    render();
+  };
+
+  function chips(c){return CARDS.filter(function(x){return x.c===c}).map(function(x){
+    return '<button class="chip'+(sel[c]===x.id?' on':'')+'" data-a="pick" data-c="'+c+'" data-id="'+x.id+'">'+x.n+'</button>'}).join('')}
+  function picker(t,ok){
+    var h='<div class="card2"><b>'+t+'</b>';
+    ['p','e','a'].forEach(function(c){h+='<div class="lab">'+CAT[c]+'</div><div class="chips">'+chips(c)+'</div>'});
+    return h+'<button data-a="ok"'+(sel.p&&sel.e&&sel.a?'':' disabled')+'>'+ok+'</button><button class="link" data-a="cancel">Annuler</button></div>';
+  }
+  function box(t,h){return '<div class="card2"><b>'+t+'</b>'+h+'</div>'}
+  function sheet(){
+    var h='<div class="card2"><p>Touche une case : ✗ exclu, ? doute, ✓ sûr.</p>';
+    [['p','Personnages'],['e','États'],['a','Attributs']].forEach(function(g){
+      h+='<div class="lab">'+g[1]+'</div>';
+      CARDS.filter(function(x){return x.c===g[0]}).forEach(function(x){
+        h+='<div class="row"><span>'+x.n+(G.hand.indexOf(x.id)>=0?' <i>(en main)</i>':'')+'</span><button class="mk" data-a="mark" data-id="'+x.id+'">'+(MK[G.marks[x.id]]||'')+'</button></div>'});
+    });
+    return h+'</div>';
+  }
+
+  function render(){
+    var g=$('gbody');
+    $('tPlay').className=tab==='play'?'':'alt';$('tSheet').className=tab==='sheet'?'':'alt';
+    if(!G){$('gstat').textContent='';g.innerHTML='<p>Distribution des cartes…</p>';return}
+    $('gstat').textContent=G.over?'Partie terminée':G.my?'À toi de jouer':'Tour de l’autre joueur';
+    if(tab==='sheet'){g.innerHTML=sheet();return}
+    var P='',o=G.over;
+    if(o){
+      P=box(o.iWon?'🎉 Victoire !':'Défaite',
+        '<p>'+(o.byMe?(o.ok?'Ton accusation est exacte : tu gagnes !':'Ton accusation est fausse : tu perds.'):(o.ok?'L’autre joueur a trouvé la solution : tu perds.':'L’autre joueur s’est trompé : tu gagnes !'))+'</p><p>La solution était :</p><p><b>'+nm(o.sol)+'</b></p><button data-a="again">Rejouer</button>');
+    }else{
+      switch(G.ph){
+        case 'choose':P=box('À toi de jouer','<button data-a="hyp">Faire une hypothèse</button><button class="alt" data-a="acc">Accuser</button>');break;
+        case 'hypSel':P=picker('Ton hypothèse','Poser la question');break;
+        case 'accSel':P=picker('Ton accusation : les 3 cartes cachées','Accuser !');break;
+        case 'waitResp':P=box('Hypothèse envoyée','<p>En attente de l’autre joueur…</p>');break;
+        case 'after':P=box(G.res,'<button class="alt" data-a="acc">Accuser</button><button data-a="pass">Terminer mon tour</button>');break;
+        case 'respond':P=box('L’autre joueur propose :','<p><b>'+G.hyp+'</b></p><p>Montre-lui une seule carte :</p><div class="chips">'+G.match.map(function(i){return '<button class="chip" data-a="show" data-id="'+i+'">'+BY[i].n+'</button>'}).join('')+'</div>');break;
+        case 'accWait':P=box('Accusation envoyée','<p>Vérification…</p>');break;
+        default:P=box('Tour de l’autre joueur','<p>Il réfléchit…</p>');
+      }
+    }
+    var hand='<div class="card2"><div class="lab">Mes cartes</div><div class="chips">'+CARDS.filter(function(x){return G.hand.indexOf(x.id)>=0}).map(function(x){return '<span class="chip">'+x.n+'</span>'}).join('')+'</div></div>';
+    g.innerHTML=P+hand+'<div class="log">'+G.log.slice(0,8).join('<br>')+'</div>';
+  }
+
+  $('game').addEventListener('click',function(e){
+    var t=e.target.closest('[data-a]');if(!t)return;
+    var a=t.getAttribute('data-a'),id=t.getAttribute('data-id');
+    if(a==='tab')tab=t.getAttribute('data-v');
+    else if(!G)return;
+    else if(a==='hyp'||a==='acc'){G.back=G.ph;G.ph=a==='hyp'?'hypSel':'accSel';sel={}}
+    else if(a==='pick')sel[t.getAttribute('data-c')]=id;
+    else if(a==='cancel')G.ph=G.back;
+    else if(a==='ok'){
+      if(!(sel.p&&sel.e&&sel.a))return;
+      var h=[sel.p,sel.e,sel.a];
+      if(G.ph==='hypSel'){snd({k:'hyp',h:h});G.log.unshift('Toi : '+nm(h));G.ph='waitResp'}
+      else if(J.isHost)finish(h,true);
+      else{snd({k:'acc',h:h});G.ph='accWait'}
+    }
+    else if(a==='show'){snd({k:'show',id:id});G.log.unshift('Tu as montré : '+BY[id].n);G.ph='opp'}
+    else if(a==='pass'){snd({k:'pass'});G.my=false;G.ph='opp'}
+    else if(a==='mark')G.marks[id]=NEXT[G.marks[id]||''];
+    else if(a==='again')location.reload();
+    render();
+  });
 })();
 </script>
 </body>

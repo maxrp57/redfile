@@ -4,14 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Jeu d’enquête</title>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <style>
-:root{--bg:#faf7f2;--card:#fff;--ink:#1f1b16;--mute:#6f675c;--acc:#8b1e2d;--accink:#fff;--line:#ddd3c4;
-box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17130f;--card:#241e18;--ink:#f3ece1;--mute:#a79c8c;--acc:#d9566a;--accink:#1a0d10;--line:#3a3128}}
-:root[data-theme="dark"]{--bg:#17130f;--card:#241e18;--ink:#f3ece1;--mute:#a79c8c;--acc:#d9566a;--accink:#1a0d10;--line:#3a3128}
-html{scroll-padding-top:env(safe-area-inset-top,0px)}
+:root{--bg:#faf7f2;--card:#fff;--ink:#1f1b16;--mute:#6f675c;--acc:#8b1e2d;--accink:#fff;--line:#ddd3c4}
+@media (prefers-color-scheme:dark){:root{--bg:#17130f;--card:#241e18;--ink:#f3ece1;--mute:#a79c8c;--acc:#d9566a;--accink:#1a0d10;--line:#3a3128}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:Georgia,'Times New Roman',serif;min-height:100vh;display:flex;justify-content:center}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Georgia,'Times New Roman',serif;min-height:100vh;display:flex;justify-content:center;padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
 main{width:100%;max-width:420px;padding:28px 20px;display:flex;flex-direction:column;gap:16px;justify-content:center}
 .kicker{font:600 11px/1 system-ui,sans-serif;letter-spacing:.28em;text-transform:uppercase;color:var(--mute);text-align:center}
 h1{font-size:36px;margin:4px 0;text-align:center}
@@ -22,8 +20,8 @@ button.link{border:0;background:none;color:var(--mute);font-weight:500;font-size
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;display:flex;flex-direction:column;gap:14px;align-items:center}
 .code{font:700 54px/1 ui-monospace,Menlo,monospace;letter-spacing:.18em;padding-left:.18em}
 input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:center;text-transform:uppercase;width:100%;padding:12px;border-radius:12px;border:2px solid var(--line);background:var(--bg);color:var(--ink)}
-.status{font:600 14px system-ui,sans-serif;display:flex;gap:8px;align-items:center;color:var(--mute)}
-.dot{width:10px;height:10px;border-radius:50%;background:var(--mute);animation:p 1.2s infinite}
+.status{font:600 14px system-ui,sans-serif;display:flex;gap:8px;align-items:center;color:var(--mute);text-align:center}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--mute);animation:p 1.2s infinite;flex:none}
 .ok .dot{background:#2e9e57;animation:none}.ok{color:#2e9e57}
 @keyframes p{50%{opacity:.25}}
 .err{color:var(--acc);font:600 14px system-ui,sans-serif;text-align:center;min-height:18px}
@@ -54,7 +52,7 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
   <div class="card">
    <p>Donne ce code à l’autre joueur</p>
    <div class="code" id="myCode">····</div>
-   <div class="status" id="stShow"><span class="dot"></span><span>En attente de l’autre joueur…</span></div>
+   <div class="status" id="stShow"><span class="dot"></span><span>Création de la partie…</span></div>
   </div>
   <button class="link" data-back="choose">Annuler</button>
  </section>
@@ -62,7 +60,7 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
  <section id="enter" hidden>
   <div class="card">
    <p>Saisis le code affiché sur l’autre téléphone</p>
-   <input id="codeIn" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" placeholder="····">
+   <input id="codeIn" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="····">
    <button id="bGo">Se connecter</button>
    <div class="status" id="stEnter" hidden><span class="dot"></span><span>Connexion…</span></div>
    <div class="err" id="err"></div>
@@ -72,7 +70,7 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
 
  <section id="ready" hidden>
   <div class="card">
-   <div class="status ok"><span class="dot"></span><span>Les deux joueurs sont connectés</span></div>
+   <div class="status ok"><span class="dot"></span><span id="readyMsg">Les deux joueurs sont connectés</span></div>
    <h1 style="font-size:28px">Prêts à jouer !</h1>
    <p>Partie <b id="gameCode"></b></p>
   </div>
@@ -85,52 +83,74 @@ input{font:700 40px ui-monospace,Menlo,monospace;letter-spacing:.2em;text-align:
   var secs=['home','choose','show','enter','ready'];
   function go(n){secs.forEach(function(s){$(s).hidden=(s!==n)})}
   document.querySelectorAll('[data-back]').forEach(function(b){
-    b.onclick=function(){leave();go(b.getAttribute('data-back'))}
+    b.onclick=function(){reset();go(b.getAttribute('data-back'))}
   });
-  var roomAPI=null,room=null,off=[],timer=null,me=Math.random().toString(36).slice(2,10),connected=false,code='';
-  var ALPHA='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  function mkCode(){var s='';for(var i=0;i<4;i++)s+=ALPHA[Math.floor(Math.random()*ALPHA.length)];return s}
 
-  function leave(){
-    off.forEach(function(f){try{f()}catch(e){}});off=[];
-    clearInterval(timer);clearTimeout(window._to);
-    if(room){try{room.leave()}catch(e){}room=null}
-    connected=false;
+  var ALPHA='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  var peer=null,conn=null,timeout=null,connected=false,code='';
+  // Pour la suite du jeu : window.jeu.conn.send({...}) et window.jeu.onMessage = function(data){...}
+  window.jeu={conn:null,isHost:false,onMessage:function(){}};
+
+  function mkCode(){var s='';for(var i=0;i<4;i++)s+=ALPHA[Math.floor(Math.random()*ALPHA.length)];return s}
+  function reset(){
+    clearTimeout(timeout);connected=false;
+    try{if(conn)conn.close()}catch(e){}
+    try{if(peer)peer.destroy()}catch(e){}
+    peer=null;conn=null;window.jeu.conn=null;
   }
-  function hello(){if(room)room.emit('hello',{id:me}).catch(function(){})}
-  function done(){
-    if(connected)return;connected=true;clearInterval(timer);clearTimeout(window._to);
-    $('gameCode').textContent=code;go('ready');
+  function setup(c,host){
+    if(conn&&conn!==c){try{c.close()}catch(e){}return}  // 2 joueurs maximum
+    conn=c;window.jeu.conn=c;window.jeu.isHost=host;
+    c.on('open',function(){
+      clearTimeout(timeout);connected=true;
+      $('gameCode').textContent=code;$('readyMsg').textContent='Les deux joueurs sont connectés';
+      go('ready');
+    });
+    c.on('data',function(d){window.jeu.onMessage(d)});
+    c.on('close',function(){
+      if(connected){$('readyMsg').textContent='L’autre joueur s’est déconnecté'}
+    });
   }
-  async function open(c,errEl){
-    code=c;
-    try{roomAPI=roomAPI||await claude.use('room')}catch(e){roomAPI=null}
-    if(!roomAPI){errEl('Connexion indisponible sur cet appareil.');return false}
-    try{room=await roomAPI.join('enq-'+c.toLowerCase())}catch(e){errEl('Impossible de rejoindre la partie.');return false}
-    off.push(room.on('hello',function(m){
-      if(m.isMe)return;
-      hello();done();
-    }));
-    hello();
-    timer=setInterval(hello,1500);
+  function checkLib(show){
+    if(typeof Peer==='undefined'){show('Connexion indisponible (bibliothèque non chargée). Vérifie ta connexion internet.');return false}
     return true;
   }
 
   $('bJoin').onclick=function(){go('choose')};
-  $('bShow').onclick=async function(){
-    go('show');$('myCode').textContent=mkCode();
-    var ok=await open($('myCode').textContent,function(t){$('stShow').lastChild.textContent=t});
-  };
-  $('bEnter').onclick=function(){$('err').textContent='';$('codeIn').value='';go('enter');setTimeout(function(){$('codeIn').focus()},50)};
-  $('bGo').onclick=async function(){
+
+  // --- Afficher mon code (hôte) ---
+  function host(tries){
+    var st=$('stShow').lastChild;
+    if(!checkLib(function(t){st.textContent=t}))return;
+    code=mkCode();$('myCode').textContent=code;st.textContent='Création de la partie…';
+    peer=new Peer('enq-'+code.toLowerCase());
+    peer.on('open',function(){st.textContent='En attente de l’autre joueur…'});
+    peer.on('connection',function(c){setup(c,true)});
+    peer.on('error',function(e){
+      if(e.type==='unavailable-id'&&tries<5){reset();host(tries+1);return}
+      st.textContent='Erreur de connexion ('+e.type+'). Réessaie.';
+    });
+    peer.on('disconnected',function(){try{peer.reconnect()}catch(e){}});
+  }
+  $('bShow').onclick=function(){reset();go('show');host(0)};
+
+  // --- Entrer un code (invité) ---
+  $('bEnter').onclick=function(){reset();$('err').textContent='';$('stEnter').hidden=true;$('codeIn').value='';go('enter');setTimeout(function(){$('codeIn').focus()},50)};
+  $('bGo').onclick=function(){
     var c=$('codeIn').value.toUpperCase().replace(/[^A-Z0-9]/g,'');
-    if(c.length!==4){$('err').textContent='Le code comporte 4 caractères.';return}
-    $('err').textContent='';$('stEnter').hidden=false;
-    var ok=await open(c,function(t){$('err').textContent=t});
-    if(!ok){$('stEnter').hidden=true;return}
-    window._to=setTimeout(function(){
-      if(!connected){$('stEnter').hidden=true;$('err').textContent='Code introuvable. Vérifie-le et que l’autre joueur affiche bien son code.';leave()}
-    },9000);
+    var err=function(t){$('stEnter').hidden=true;$('err').textContent=t};
+    if(c.length!==4){err('Le code comporte 4 caractères.');return}
+    if(!checkLib(err))return;
+    reset();code=c;$('err').textContent='';$('stEnter').hidden=false;
+    peer=new Peer();
+    peer.on('open',function(){
+      setup(peer.connect('enq-'+c.toLowerCase(),{reliable:true}),false);
+      timeout=setTimeout(function(){reset();err('Pas de réponse. Vérifie le code et que l’autre joueur affiche bien le sien.')},15000);
+    });
+    peer.on('error',function(e){
+      reset();
+      err(e.type==='peer-unavailable'?'Code introuvable. Vérifie-le et que l’autre joueur affiche bien son code.':'Erreur de connexion ('+e.type+'). Réessaie.');
+    });
   };
 })();
 </script>

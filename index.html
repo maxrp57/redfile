@@ -317,6 +317,104 @@ body.noanim .card .inner{transition-duration:.01ms}
 </div>
 
 <script>
+/* Salon en ligne hors Claude (GitHub Pages…) : recrée window.claude.use('room') via MQTT sur des brokers publics.
+   Salon privé entre amis : ouvrez la page avec ?salon=monnom (ex. .../index.html?salon=famille). */
+(function(){
+ if(window.claude&&window.claude.use)return;
+ const NAME=(new URLSearchParams(location.search).get('salon')||'').toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,32);
+ const BASE='dossier-secret-k7q2x9/'+(NAME||'public');
+ const BROKERS=['wss://broker.emqx.io:8084/mqtt','wss://broker.hivemq.com:8884/mqtt','wss://test.mosquitto.org:8081'];
+ const LIBS=['https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js','https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js'];
+ const ID_RE=/^[a-z0-9]{6,16}$/;
+ const rid=()=>{const a=new Uint8Array(10);crypto.getRandomValues(a);return Array.from(a,x=>(x%36).toString(36)).join('');};
+ const ME=rid();
+ const loadScript=u=>new Promise((ok,ko)=>{const s=document.createElement('script');s.src=u;s.onload=ok;s.onerror=()=>{s.remove();ko(new Error('load'));};document.head.appendChild(s);});
+ async function loadMqtt(){
+  if(window.mqtt)return;
+  for(const u of LIBS){try{await loadScript(u);if(window.mqtt)return;}catch(e){}}
+  throw new Error('mqtt');
+ }
+ function tryBroker(url,will){
+  return new Promise((ok,ko)=>{
+   const c=window.mqtt.connect(url,{clientId:'ds_'+ME,clean:true,keepalive:30,reconnectPeriod:2000,connectTimeout:6000,will});
+   let done=false;
+   const t=setTimeout(()=>{if(!done){done=true;try{c.end(true);}catch(e){}ko(new Error('timeout'));}},7000);
+   c.on('error',()=>{});
+   c.once('connect',()=>{if(!done){done=true;clearTimeout(t);ok(c);}});
+  });
+ }
+ const clean=o=>({name:String((o&&o.name)||'Joueur').slice(0,24),avatar:String((o&&o.avatar)||'🕵️').slice(0,8),st:(o&&o.st)==='table'?'table':'dispo'});
+ async function makeRoom(){
+  await loadMqtt();
+  const myTopic=BASE+'/p/'+ME;
+  let c=null;
+  for(const u of BROKERS){try{c=await tryBroker(u,{topic:myTopic,payload:'',qos:0,retain:true});break;}catch(e){}}
+  if(!c)throw new Error('broker');
+  let mine={};
+  const peers=new Map(),peerCbs=[],evCbs={},tables=new Map();
+  const pub=(t,o,retain)=>{try{c.publish(t,JSON.stringify(o),{qos:0,retain:!!retain});}catch(e){}};
+  const list=()=>{const a=[{peer:ME,presence:clean(mine),isMe:true,sameTab:true,kind:'viewer'}];peers.forEach((v,k)=>a.push({peer:k,presence:v.presence,isMe:false,sameTab:false,kind:'viewer'}));return a;};
+  const notify=()=>{const ch={peers:list()};peerCbs.forEach(f=>{try{f(ch);}catch(e){}});};
+  const sendPresence=()=>{if(mine.name)pub(myTopic,clean(mine),true);};
+  const fire=(t,m)=>(evCbs[t]||[]).forEach(f=>{try{f(m);}catch(e){}});
+  c.on('message',(topic,buf,pkt)=>{
+   if(topic.indexOf(BASE+'/')!==0)return;
+   const parts=topic.slice(BASE.length+1).split('/'),raw=buf.toString();
+   let msg=null;
+   if(raw){try{msg=JSON.parse(raw);}catch(e){return;}}
+   if(parts[0]==='p'){
+    const id=parts[1]||'';
+    if(!ID_RE.test(id)||id===ME)return;
+    if(!msg){if(peers.delete(id))notify();return;}
+    const old=peers.get(id);
+    peers.set(id,{presence:clean(msg),last:Date.now(),live:!(pkt&&pkt.retain)||!!(old&&old.live)});
+    notify();
+   }else if(parts[0]==='e'){
+    if(!msg||typeof msg.t!=='string'||!ID_RE.test(msg.f||''))return;
+    fire(msg.t,{peer:msg.f,isMe:msg.f===ME,kind:'viewer',data:msg.d});
+   }else if(parts[0]==='t'){
+    const h=tables.get(parts[1]);
+    if(h&&msg&&typeof msg.t==='string'&&ID_RE.test(msg.f||''))h(msg.t,{peer:msg.f,isMe:msg.f===ME,kind:'viewer',data:msg.d});
+   }
+  });
+  c.subscribe([BASE+'/p/+',BASE+'/e/'+ME,BASE+'/e/all'],{qos:0});
+  c.on('connect',sendPresence);
+  setInterval(()=>{
+   sendPresence();
+   const now=Date.now();let ch=false;
+   peers.forEach((v,k)=>{if(now-v.last>(v.live?50000:25000)){peers.delete(k);ch=true;}});
+   if(ch)notify();
+  },15000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)sendPresence();});
+  window.addEventListener('pagehide',()=>{try{c.publish(myTopic,'',{qos:0,retain:true});}catch(e){}});
+  return{
+   onPeers(f){peerCbs.push(f);f({peers:list()});},
+   on(t,f){(evCbs[t]=evCbs[t]||[]).push(f);},
+   emit(t,d){const to=d&&d.to;pub(BASE+'/e/'+(ID_RE.test(to||'')?to:'all'),{t:String(t),f:ME,d:d});},
+   presence(o){mine={...mine,...o};sendPresence();notify();},
+   async join(name){
+    name=String(name).replace(/[^a-z0-9]/g,'').slice(0,24);
+    if(!name)throw new Error('name');
+    const topic=BASE+'/t/'+name,cbs={};
+    tables.set(name,(t,m)=>(cbs[t]||[]).forEach(f=>{try{f(m);}catch(e){}}));
+    c.subscribe(topic,{qos:0});
+    return{
+     on(t,f){(cbs[t]=cbs[t]||[]).push(f);},
+     emit(t,d){pub(topic,{t:String(t),f:ME,d:d});},
+     leave(){tables.delete(name);try{c.unsubscribe(topic);}catch(e){}}
+    };
+   }
+  };
+ }
+ let roomP=null;
+ window.SALON_NAME=NAME;
+ window.claude={use:async k=>{
+  if(k!=='room')throw new Error('unsupported');
+  return roomP||(roomP=makeRoom().catch(e=>{roomP=null;throw e;}));
+ }};
+})();
+</script>
+<script>
 'use strict';
 /* =====================================================================
    1. DONNÉES DES CARTES
@@ -1025,7 +1123,7 @@ const Lobby={room:null,table:null,peers:[],pend:{},inbox:[],partner:null,started
  nameOf(peer){const p=this.peers.find(x=>x.peer===peer);return p?this.pname(p):'Un joueur';},
  async init(){
   if(!this.started){
-   this.started=true;
+   this.started=true;this.render();
    try{this.room=window.claude&&window.claude.use?await window.claude.use('room'):null;}catch(e){this.room=null;}
    this.ready=true;
    const R=this.room;
@@ -1082,10 +1180,10 @@ const Lobby={room:null,table:null,peers:[],pend:{},inbox:[],partner:null,started
  },
  render(){
   const el=$('#lobby');if(!el)return;
-  const head='<div class="panel"><div class="back"><button class="btn small" data-act="menu">← Menu</button></div><h2>Salon en ligne</h2>';
+  const head='<div class="panel"><div class="back"><button class="btn small" data-act="menu">← Menu</button></div><h2>Salon en ligne</h2>'+(window.SALON_NAME?'<p class="hint">Salon privé : '+esc(window.SALON_NAME)+'</p>':'');
   let body='';
   if(!this.ready)body='<p class="hint">Connexion au salon…</p>';
-  else if(!this.room)body='<p>Le salon n\'est disponible que sur la page publiée, pour les personnes qui ont accès à ce lien.</p>';
+  else if(!this.room)body='<p>Impossible de joindre le serveur du salon. Vérifiez votre connexion puis réessayez.</p><button class="btn gold" data-act="lobbyRetry">Réessayer</button>';
   else if(this.partner){
    body=`<div class="lob-row inv"><span class="av">✅</span><span class="nm">Table privée avec ${esc(this.partner.name)}<small>Vous êtes tous les deux connectés à la même table.</small></span><span class="acts"><button class="btn small ghost" data-act="lobbyLeave">Quitter la table</button></span></div>`;
   }else{
@@ -1113,6 +1211,7 @@ const ACTIONS={
  lobbyAccept(el){Lobby.accept(el.dataset.id);},
  lobbyDecline(el){Lobby.decline(el.dataset.id);},
  lobbyLeave(){Lobby.leave();},
+ lobbyRetry(){Lobby.started=false;Lobby.ready=false;Lobby.room=null;Lobby.init();},
  goRulesFromGame(){closeModals();modal(`<h3>Règles en bref</h3><p>1 hypothèse = 1 personnage + 1 état + 1 attribut. Vérification dans le sens horaire, une seule carte montrée, à l'auteur seulement. Accusation exacte = victoire ; fausse = plus d'accusation.</p><button class="btn" data-act="closeModal">Fermer</button>`);},
  resume(){const s=Save.read();if(!s||!Engine.validate(s)){toast('Aucune partie valide à reprendre.',true);Save.clear();show('menu');return;}G=s;G.fresh=false;startRun();},
  setN(el){Cfg.get().n=+el.dataset.n;Cfg.save();renderSetup();},
